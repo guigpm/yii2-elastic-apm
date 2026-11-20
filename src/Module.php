@@ -15,6 +15,7 @@ use ivoglent\yii2\apm\listeners\RequestListener;
 use ivoglent\yii2\apm\listeners\TraceListener;
 use ivoglent\yii2\apm\listeners\WorkerListener;
 use yii\base\Application;
+use yii\console\Application as ConsoleApplication;
 use yii\base\BootstrapInterface;
 use yii\base\InvalidConfigException;
 use Yii;
@@ -46,7 +47,13 @@ class Module extends \yii\base\Module implements BootstrapInterface
                 throw new InvalidConfigException('Missing config for APM agent');
             }
             $agentConfig = $this->configs['agent'];
-            $config = new Config($agentConfig['name'], Yii::$app->version, $agentConfig['serverUrl'], $agentConfig['token']);
+            $config = new Config(
+                $agentConfig['name'],
+                Yii::$app->version,
+                $agentConfig['serverUrl'],
+                $agentConfig['token'] ?? null,
+                client: $agentConfig['client'] ?? null
+            );
             $framework = new Framework([
                 'name' => 'Yii2',
                 'version' => Yii::getVersion()
@@ -58,7 +65,7 @@ class Module extends \yii\base\Module implements BootstrapInterface
 
             try {
                 $this->agent = new Agent($config);
-                if (PHP_SAPI === 'cli') {
+                if (Yii::$app instanceof ConsoleApplication) {
                     Yii::$app->setComponents([
                         'errorHandler' => [
                             'class' => ConsoleErrorHandler::class,
@@ -68,7 +75,7 @@ class Module extends \yii\base\Module implements BootstrapInterface
                     Yii::$app->setComponents([
                         'errorHandler' => [
                             'class' => WebErrorHandler::class,
-                            'errorAction' => '/' . Yii::$app->errorHandler->errorAction
+                            'errorAction' => Yii::$app->errorHandler->errorAction
                         ]
                     ]);
                 }
@@ -88,7 +95,7 @@ class Module extends \yii\base\Module implements BootstrapInterface
     private function isAssetRequest()
     {
         if (isset($_SERVER['REQUEST_URI'])) {
-            $url = $_SERVER['REQUEST_URI'];
+            $url = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?? '';
             return preg_match('/\.(js|css|png|jpeg|jpg|map|mp4|avi|mp3|mov)$/i', $url);
         }
         return false;
@@ -108,12 +115,10 @@ class Module extends \yii\base\Module implements BootstrapInterface
      */
     public function bootstrap($app)
     {
-        $components = [
-            'apmAgent' => $this->agent,
-        ];
-        if ($this->enabled) {
+        if ($this->agent && !$this->ready) {
+            $components = ['apmAgent' => $this->agent];
             Yii::info('APM module booting', 'apm');
-            if (PHP_SAPI === 'cli') {
+            if (Yii::$app instanceof ConsoleApplication) {
                 $components = array_merge($components, [
                     'consoleListener' => [
                         'class' => ConsoleListener::class,
@@ -121,13 +126,7 @@ class Module extends \yii\base\Module implements BootstrapInterface
                     ]
                 ]);
             } else {
-                if (!$this->isAssetRequest()) {
-                    $components = array_merge($components, [
-                        'requestListener' => [
-                            'class' => RequestListener::class
-                        ]
-                    ]);
-                }
+                $components['requestListener'] = ['class' => RequestListener::class];
             }
             $components = array_merge($components, [
                 'queryListener' => [
@@ -148,6 +147,7 @@ class Module extends \yii\base\Module implements BootstrapInterface
             foreach ($components as $key => $config) {
                 $component = $app->{$key};
                 if ($component instanceof Listener) {
+                    $component->setAgent($this->agent);
                     $component->start();
                 }
             }

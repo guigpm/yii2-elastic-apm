@@ -32,6 +32,7 @@ class ExceptionListener extends Listener
         $sender = $event->sender;
         foreach ($this->skipExceptions as $exception) {
             if ($sender->errorException instanceof $exception) {
+                $this->agent->stopTransaction('5xx');
                 return;
             }
         }

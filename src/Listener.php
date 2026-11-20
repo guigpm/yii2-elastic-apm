@@ -13,7 +13,13 @@ class Listener extends Component
      */
     protected $agent;
 
-    public function start() {
-        $this->agent = \Yii::$app->getModule('apm')->getAgent();
+    public function setAgent(Agent $agent): void
+    {
+        $this->agent = $agent;
+    }
+
+    public function start()
+    {
+        $this->agent ??= \Yii::$app->get('apmAgent');
     }
 }

@@ -26,7 +26,7 @@ class RequestListener extends Listener
         $this->skipActions = array_merge($this->skipActions, [
             Yii::$app->errorHandler->errorAction
         ]);
-        //Event::on(Response::class, Response::EVENT_AFTER_SEND, [$this, 'afterRequest']);
+        Event::on(Response::class, Response::EVENT_AFTER_SEND, [$this, 'afterRequest']);
         register_shutdown_function(function () {
             register_shutdown_function([$this, 'afterRequest']);
         });
@@ -55,12 +55,12 @@ class RequestListener extends Listener
      */
     public function beforeAction(ActionEvent $event) {
         Yii::info('Action start', 'apm');
-        $txtName = sprintf('%s.%s', Yii::$app->controller->id, $event->action->id);
-        if (false ===  $this->agent->isReady()) {
-            $this->agent->startTransaction($txtName, 'http');
+        $txtName = sprintf('%s.%s', $event->action->controller->id, $event->action->id);
+        if (!$this->agent->isReady()) {
+            return;
         }
-        if (!empty(Yii::$app->controller->module)) {
-            $txtName = Yii::$app->controller->module->id . '.' . $txtName;
+        if (!empty($event->action->controller->module)) {
+            $txtName = $event->action->controller->module->id . '.' . $txtName;
         }
         if (!Yii::$app->request->isOptions && !$this->isSkipActions(str_replace('.', '/', $txtName))) {
             $this->agent->getTransaction()->setName($txtName);
