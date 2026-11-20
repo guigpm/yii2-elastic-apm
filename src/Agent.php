@@ -8,6 +8,7 @@ use Elastic\Apm\PhpAgent\Model\Span;
 use GuzzleHttp\Exception\GuzzleException;
 use Psr\Http\Message\RequestInterface;
 use Throwable;
+use WeakMap;
 use Yii;
 
 class Agent extends BaseAgent
@@ -15,6 +16,7 @@ class Agent extends BaseAgent
     public $transactionStarted = false;
 
     private array $pendingSpans = [];
+    private WeakMap $reportedExceptions;
     private bool $exportFailed = false;
 
     public function startTransaction(string $name, string $type, ?string $id = null)
@@ -29,6 +31,7 @@ class Agent extends BaseAgent
             $this->exportFailed = false;
         }
         parent::startTransaction($name, $type, $id);
+        $this->reportedExceptions = new WeakMap();
         $this->transactionStarted = true;
     }
 
@@ -48,9 +51,12 @@ class Agent extends BaseAgent
 
     public function notifyException(Throwable $throwable)
     {
-        if ($this->isReady()) {
-            parent::notifyException($throwable);
+        if (!$this->isReady() || isset($this->reportedExceptions[$throwable])) {
+            return;
         }
+
+        parent::notifyException($throwable);
+        $this->reportedExceptions[$throwable] = true;
     }
 
     public function stopTransaction(?string $result = null): void

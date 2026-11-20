@@ -88,6 +88,64 @@ return [
 compatível com Guzzle 7. `serverUrl` deve incluir o esquema. O agente recebe
 `YII_ENV`, a versão da aplicação e os metadados do Yii.
 
+## Preservar o handler de erro da aplicação
+
+Em `modules.apm`, defina `replaceErrorHandler` como `false` e mantenha o
+componente `errorHandler` configurado pela aplicação. O padrão `true`
+mantém a instalação dos handlers do módulo. Com APM desativado, o handler
+da aplicação permanece registrado.
+
+```php
+'bootstrap' => ['log', 'apm'],
+'modules' => [
+    'apm' => [
+        'class' => \ivoglent\yii2\apm\Module::class,
+        'enabled' => filter_var(getenv('APM_ENABLED'), FILTER_VALIDATE_BOOLEAN),
+        'replaceErrorHandler' => false,
+        'configs' => [
+            'agent' => [
+                'name' => 'web-staging',
+                'serverUrl' => 'https://apm.example.invalid:8200',
+                'token' => 'token-ficticio',
+            ],
+            'skipExceptions' => [],
+        ],
+    ],
+],
+```
+
+No handler do consumidor, chame `reportException()` com a exceção original
+antes de delegar ao fluxo existente. O exemplo cobre o ponto de entrada do
+Yii para exceções não tratadas e o caminho que renderiza diretamente 401 e 404.
+No console, use a mesma chamada em `handleException()` do handler de console.
+
+```php
+class ApplicationErrorHandler extends \yii\web\ErrorHandler
+{
+    public function handleException($exception)
+    {
+        \Yii::$app->getModule('apm')?->reportException($exception);
+        parent::handleException($exception);
+    }
+
+    public function responseException(\Throwable $exception): void
+    {
+        \Yii::$app->getModule('apm')?->reportException($exception);
+        // Preserve os logs e as demais etapas existentes deste método.
+        parent::renderException($exception);
+    }
+}
+```
+
+Para um handler que renderiza via outro método, faça a chamada no
+`catch` da aplicação, antes de delegar a renderização. O hook é seguro
+com APM desativado ou sem transação ativa. O mesmo objeto de exceção é
+registrado uma única vez por transação, inclusive quando chega pelo hook
+e pelo listener legado. A captura respeita `skipExceptions` e deixa o
+encerramento com o ciclo de vida da aplicação. Falhas HTTP registram o
+status exato em `transaction.result`, por exemplo `"401"` ou `"404"`.
+Respostas abaixo de 400 mantêm o agrupamento, por exemplo `"2xx"`.
+
 ## Ciclo de vida
 
 - HTTP abre a transação no bootstrap e fecha após o envio da resposta.
@@ -106,9 +164,10 @@ compatível com Guzzle 7. `serverUrl` deve incluir o esquema. O agente recebe
   durante a preparação PDO podem chegar ao erro da transação sem span SQL.
   O contexto `span.context.db.statement` contém o SQL expandido pelo Yii.
   Use dados fictícios nos testes e revise o acesso a esse campo no APM.
-- Os handlers de erro do módulo associam a exceção à transação e encerram o
-  lote. `skipExceptions` omite o evento de erro, mantendo o encerramento da
-  transação. Confirme a integração se a aplicação já substitui o error handler.
+- Os handlers de erro do módulo e o hook público associam a exceção à
+  transação ativa. O lote web fecha após o envio da resposta. No console, o
+  shutdown fecha a transação com `Failed(1)` quando o handler encerra o
+  processo antes de `EVENT_AFTER_REQUEST`.
 - Spans ainda abertos são fechados ao encerrar a transação. Faça novas
   chamadas de `startTrace()` durante uma transação ativa e passe
   `$span->getId()` a `stopTrace()`. Se o Guzzle lançar durante o envio, o
@@ -132,16 +191,16 @@ composer validate --strict
 composer check-platform-reqs
 composer audit --locked
 find src tests -name '*.php' -exec php -l {} +
-for mode in console web asset disabled options; do
-  php -d error_reporting=E_ALL tests/integration.php "$mode" || exit 1
-done
+sh tests/run.sh
 ```
 
 Os testes usam SQLite em memória com PDO e Guzzle simulado. Exercitam
 bootstrap, resultado do console, lifecycle da aplicação web, exclusões,
 eventos SQL de sucesso e falha, correlação de span e erro no NDJSON,
 encerramento de spans pendentes, um POST por lote e isolamento da próxima
-transação após falha de conexão.
+transação após falha de conexão. A suíte verifica a identidade e o registro
+PHP dos handlers preservados, as respostas 401 e 404, a exceção não tratada
+em web e console, a filtragem e a ausência de transação ativa.
 
 No WEB, mantenha o comando temporário como opção de rollback até validar o
 módulo real em staging. Com PHP-FPM, o driver de banco do WEB e um APM Server

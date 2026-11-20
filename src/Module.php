@@ -6,6 +6,7 @@ namespace ivoglent\yii2\apm;
 use Elastic\Apm\PhpAgent\Config;
 use Elastic\Apm\PhpAgent\Model\Framework;
 use Exception;
+use Throwable;
 use ivoglent\yii2\apm\components\ConsoleErrorHandler;
 use ivoglent\yii2\apm\components\WebErrorHandler;
 use ivoglent\yii2\apm\listeners\ConsoleListener;
@@ -33,7 +34,11 @@ class Module extends \yii\base\Module implements BootstrapInterface
 
     public $enabled = false;
 
+    public bool $replaceErrorHandler = true;
+
     private $ready = false;
+
+    private ?ExceptionListener $exceptionListener = null;
 
     /**
      * @throws InvalidConfigException
@@ -65,22 +70,24 @@ class Module extends \yii\base\Module implements BootstrapInterface
 
             try {
                 $this->agent = new Agent($config);
-                if (Yii::$app instanceof ConsoleApplication) {
-                    Yii::$app->setComponents([
-                        'errorHandler' => [
-                            'class' => ConsoleErrorHandler::class,
-                        ]
-                    ]);
-                } else {
-                    Yii::$app->setComponents([
-                        'errorHandler' => [
-                            'class' => WebErrorHandler::class,
-                            'errorAction' => Yii::$app->errorHandler->errorAction
-                        ]
-                    ]);
-                }
+                if ($this->replaceErrorHandler) {
+                    if (Yii::$app instanceof ConsoleApplication) {
+                        Yii::$app->setComponents([
+                            'errorHandler' => [
+                                'class' => ConsoleErrorHandler::class,
+                            ]
+                        ]);
+                    } else {
+                        Yii::$app->setComponents([
+                            'errorHandler' => [
+                                'class' => WebErrorHandler::class,
+                                'errorAction' => Yii::$app->errorHandler->errorAction
+                            ]
+                        ]);
+                    }
 
-                Yii::$app->errorHandler->register();
+                    Yii::$app->errorHandler->register();
+                }
             } catch (Exception $e) {
                 Yii::error($e->getMessage());
             }
@@ -151,7 +158,16 @@ class Module extends \yii\base\Module implements BootstrapInterface
                     $component->start();
                 }
             }
+            $this->exceptionListener = $app->get('exceptionListener');
             $this->ready = true;
+        }
+    }
+
+    /** Report an exception before the application renders it. */
+    public function reportException(Throwable $exception): void
+    {
+        if ($this->enabled) {
+            $this->exceptionListener?->reportException($exception);
         }
     }
 
